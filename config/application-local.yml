@@ -1,0 +1,93 @@
+# RuoYi-Vue-Plus 本地开发环境配置
+# 将此文件复制到 ruoyi-admin/src/main/resources/ 目录下
+
+--- # 监控中心配置
+spring.boot.admin.client:
+  # 增加客户端开关
+  enabled: false
+  url: http://localhost:9090/admin
+
+--- # snail-job 配置
+snail-job:
+  enabled: false
+  # 需要在 SnailJob 后台组管理创建对应名称的组,然后创建任务的时候选择对应的组,才能正确分派任务
+  group: "ruoyi_group"
+  # SnailJob 接入验证令牌 详见 script/sql/ry_job.sql `sj_group_config` 表
+  token: "SJ_cKqBTPzCsWA3VyuCfFoccmuIEGXjr5KT"
+  server:
+    host: 127.0.0.1
+    port: 17888
+  # 命名空间UUID 详见 script/sql/ry_job.sql `sj_namespace`表`unique_id`字段
+  namespace: local
+  # 随主应用端口漂移
+  port: 28080
+  # 客户端ip指定
+  host:
+
+--- # 数据源配置
+spring:
+  datasource:
+    type: com.zaxxer.hikari.HikariDataSource
+    dynamic:
+      # 性能分析插件(有性能损耗 不建议生产环境使用)
+      p6spy: false
+      # 设置默认的数据源或者数据源组,默认值即为 master
+      primary: master
+      # 严格模式 匹配不到数据源则报错
+      strict: true
+      datasource:
+        # 主库数据源
+        master:
+          type: ${spring.datasource.type}
+          driverClassName: com.mysql.cj.jdbc.Driver
+          url: jdbc:mysql://localhost:3306/ry-vue?useUnicode=true&characterEncoding=utf8&zeroDateTimeBehavior=convertToNull&useSSL=false&serverTimezone=GMT%2B8&autoReconnect=true&rewriteBatchedStatements=true&allowPublicKeyRetrieval=true&nullCatalogMeansCurrent=true
+          username: root
+          password: root
+      hikari:
+        # 最大连接池数量
+        maxPoolSize: 20
+        # 最小空闲线程数量
+        minIdle: 10
+        # 配置获取连接等待超时的时间
+        connectionTimeout: 30000
+        # 校验超时时间
+        validationTimeout: 5000
+        # 空闲连接存活最大时间，默认10分钟
+        idleTimeout: 600000
+        # 此属性控制池中连接的最长生命周期，值0表示无限生命周期，默认30分钟
+        maxLifetime: 1800000
+        # 多久检查一次连接的活性
+        keepaliveTime: 30000
+
+--- # redis 单机配置
+spring.data:
+  redis:
+    host: localhost
+    port: 6379
+    password: ruoyi123
+    database: 0
+    timeout: 10s
+    connect-timeout: 10s
+
+--- # OSS 配置 (MinIO)
+# MinIO 配置已在数据库 sys_oss_config 表中
+# 默认配置：
+# - endpoint: 127.0.0.1:9000
+# - accessKey: ruoyi
+# - secretKey: ruoyi123
+# - bucketName: ruoyi
+
+--- # 日志配置
+logging:
+  level:
+    org.dromara: debug
+    org.springframework: warn
+
+--- # 开发环境配置
+server:
+  port: 8080
+
+# 关闭 banner
+spring:
+  main:
+    banner-mode: off
