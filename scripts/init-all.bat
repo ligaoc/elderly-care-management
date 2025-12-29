@@ -84,6 +84,21 @@ echo.
 echo 等待 MySQL 就绪（约 30 秒）...
 timeout /t 30 /nobreak >nul
 
+:: 导入健康管理模块 SQL
+echo.
+echo [8/8] 导入健康管理模块数据...
+if exist "sql\health_management.sql" (
+    docker cp sql\health_management.sql ruoyi-mysql:/tmp/health_management.sql
+    docker exec ruoyi-mysql mysql -uroot -proot --default-character-set=utf8mb4 ry-vue -e "source /tmp/health_management.sql"
+    if errorlevel 1 (
+        echo 警告：健康管理 SQL 导入失败，请手动执行 sql\health_management.sql
+    ) else (
+        echo 健康管理模块数据导入成功
+    )
+) else (
+    echo 警告：未找到 sql\health_management.sql
+)
+
 :: 检查服务状态
 echo.
 echo 检查服务状态...
