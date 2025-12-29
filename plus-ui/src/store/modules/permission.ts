@@ -9,6 +9,12 @@ import ParentView from '@/components/ParentView/index.vue';
 import InnerLink from '@/layout/components/InnerLink/index.vue';
 import { ref } from 'vue';
 import { createCustomNameComponent } from '@/utils/createCustomNameComponent';
+import { useUserStore } from '@/store/modules/user';
+
+// 需要隐藏首页的租户ID列表（演示租户）
+const HIDE_HOME_TENANT_IDS = ['461397'];
+// 需要扁平化显示的菜单（去掉父级，直接显示子菜单）
+const FLATTEN_MENU_PATHS = ['health'];
 
 // 匹配views里面所有的.vue文件
 const modules = import.meta.glob('./../../views/**/*.vue');
@@ -48,9 +54,19 @@ export const usePermissionStore = defineStore('permission', () => {
   const generateRoutes = async (): Promise<RouteRecordRaw[]> => {
     const res = await getRouters();
     const { data } = res;
-    const sdata = JSON.parse(JSON.stringify(data));
-    const rdata = JSON.parse(JSON.stringify(data));
-    const defaultData = JSON.parse(JSON.stringify(data));
+    
+    // 获取当前租户ID
+    const userStore = useUserStore();
+    const currentTenantId = userStore.tenantId;
+    const shouldHideHome = HIDE_HOME_TENANT_IDS.includes(currentTenantId);
+    const shouldFlattenMenus = HIDE_HOME_TENANT_IDS.includes(currentTenantId);
+    
+    // 处理菜单数据：针对演示租户扁平化指定的父级菜单
+    const processedData = shouldFlattenMenus ? flattenMenus(data) : data;
+    
+    const sdata = JSON.parse(JSON.stringify(processedData));
+    const rdata = JSON.parse(JSON.stringify(processedData));
+    const defaultData = JSON.parse(JSON.stringify(processedData));
     const sidebarRoutes = filterAsyncRouter(sdata);
     const rewriteRoutes = filterAsyncRouter(rdata, undefined, true);
     const defaultRoutes = filterAsyncRouter(defaultData);
@@ -59,12 +75,59 @@ export const usePermissionStore = defineStore('permission', () => {
       router.addRoute(route);
     });
     setRoutes(rewriteRoutes);
-    setSidebarRouters(constantRoutes.concat(sidebarRoutes));
+    
+    // 根据租户决定是否显示首页
+    let finalConstantRoutes = constantRoutes;
+    if (shouldHideHome) {
+      // 过滤掉首页路由
+      finalConstantRoutes = constantRoutes.filter(route => {
+        // 保留非首页的路由
+        if (route.path === '' && route.children) {
+          return !route.children.some(child => child.path === '/index');
+        }
+        return true;
+      });
+    }
+    
+    setSidebarRouters(finalConstantRoutes.concat(sidebarRoutes));
     setDefaultRoutes(sidebarRoutes);
     setTopbarRoutes(defaultRoutes);
     // 路由name重复检查
     duplicateRouteChecker(asyncRoutes, sidebarRoutes);
     return new Promise<RouteRecordRaw[]>((resolve) => resolve(rewriteRoutes));
+  };
+  
+  /**
+   * 扁平化指定的父级菜单，将子菜单提升到顶级
+   */
+  const flattenMenus = (menus: any[]): any[] => {
+    const result: any[] = [];
+    menus.forEach(menu => {
+      if (FLATTEN_MENU_PATHS.includes(menu.path) && menu.children && menu.children.length > 0) {
+        // 将子菜单提升为顶级菜单，每个子菜单作为独立的顶级路由
+        menu.children.forEach((child: any) => {
+          const newPath = menu.path + '/' + child.path;
+          result.push({
+            name: child.name,
+            path: newPath,
+            hidden: child.hidden,
+            component: 'Layout',
+            meta: child.meta,
+            alwaysShow: false,
+            children: [{
+              name: child.name + 'Index',
+              path: '',
+              component: child.component,
+              meta: child.meta,
+              hidden: false
+            }]
+          });
+        });
+      } else {
+        result.push(menu);
+      }
+    });
+    return result;
   };
 
   /**
