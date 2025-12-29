@@ -69,7 +69,7 @@
               </el-button>
             </div>
           </template>
-          <div id="onlineRateChart" class="chart-container"></div>
+          <div ref="onlineRateChartRef" class="chart-container"></div>
           <div class="chart-info">
             <div class="info-item">
               <span class="info-label">在线率:</span>
@@ -98,7 +98,7 @@
               </el-button>
             </div>
           </template>
-          <div id="alertTrendChart" class="chart-container"></div>
+          <div ref="alertTrendChartRef" class="chart-container-full"></div>
         </el-card>
       </el-col>
 
@@ -113,7 +113,7 @@
               </el-button>
             </div>
           </template>
-          <div id="alertDistributionChart" class="chart-container"></div>
+          <div ref="alertDistributionChartRef" class="chart-container-full"></div>
         </el-card>
       </el-col>
     </el-row>
@@ -138,20 +138,19 @@
             <div v-else>
               <div v-for="alert in latestAlerts" :key="alert.id" class="alert-item">
                 <div class="alert-level">
-                  <el-tag v-if="alert.alertLevel === '1'" type="danger" size="small">紧急</el-tag>
+                  <el-tag v-if="alert.alertLevel === '3'" type="danger" size="small">紧急</el-tag>
                   <el-tag v-else-if="alert.alertLevel === '2'" type="warning" size="small">重要</el-tag>
-                  <el-tag v-else-if="alert.alertLevel === '3'" type="primary" size="small">一般</el-tag>
-                  <el-tag v-else type="info" size="small">提示</el-tag>
+                  <el-tag v-else type="info" size="small">一般</el-tag>
                 </div>
                 <div class="alert-content">
                   <div class="alert-title">{{ alert.alertTitle }}</div>
                   <div class="alert-info">
-                    <span class="alert-user">{{ alert.userName }}</span>
                     <span class="alert-time">{{ formatTime(alert.alertTime) }}</span>
                   </div>
                 </div>
                 <div class="alert-status">
-                  <el-tag v-if="alert.handleStatus === '1'" type="danger" size="small">待处理</el-tag>
+                  <el-tag v-if="alert.handleStatus === '0'" type="danger" size="small">待处理</el-tag>
+                  <el-tag v-else-if="alert.handleStatus === '1'" type="warning" size="small">处理中</el-tag>
                   <el-tag v-else-if="alert.handleStatus === '2'" type="success" size="small">已处理</el-tag>
                   <el-tag v-else type="info" size="small">已忽略</el-tag>
                 </div>
@@ -161,7 +160,7 @@
         </el-card>
       </el-col>
 
-      <!-- 设备分布地图 -->
+      <!-- 设备分布 -->
       <el-col :xs="24" :sm="24" :md="12" :lg="12" :xl="12">
         <el-card shadow="hover" class="map-card">
           <template #header>
@@ -172,23 +171,7 @@
               </el-button>
             </div>
           </template>
-          <div id="deviceMapChart" class="map-container">
-            <div class="map-placeholder">
-              <el-icon class="map-icon"><Location /></el-icon>
-              <p>设备分布地图</p>
-              <div class="device-stats">
-                <div class="device-stat-item">
-                  <span class="stat-dot online-dot"></span>
-                  <span>在线设备: {{ deviceDistribution.filter(d => d.online).length }}</span>
-                </div>
-                <div class="device-stat-item">
-                  <span class="stat-dot offline-dot"></span>
-                  <span>离线设备: {{ deviceDistribution.filter(d => !d.online).length }}</span>
-                </div>
-              </div>
-              <p class="map-note">(此处可集成高德地图等地图服务)</p>
-            </div>
-          </div>
+          <div ref="deviceDistributionChartRef" class="map-container"></div>
         </el-card>
       </el-col>
     </el-row>
@@ -207,6 +190,7 @@
 </template>
 
 <script setup name="HealthDashboard" lang="ts">
+import * as echarts from 'echarts';
 import { 
   getStatistics,
   getDeviceOnlineRate,
@@ -226,7 +210,19 @@ import { HealthDeviceAlertVO } from '@/api/health/alert/types';
 
 const { proxy } = getCurrentInstance() as ComponentInternalInstance;
 
-// 数据状态
+// Chart DOM refs
+const onlineRateChartRef = ref<HTMLElement>();
+const alertTrendChartRef = ref<HTMLElement>();
+const alertDistributionChartRef = ref<HTMLElement>();
+const deviceDistributionChartRef = ref<HTMLElement>();
+
+// Chart instances
+let onlineRateChart: echarts.ECharts | null = null;
+let alertTrendChart: echarts.ECharts | null = null;
+let alertDistributionChart: echarts.ECharts | null = null;
+let deviceDistributionChart: echarts.ECharts | null = null;
+
+// Data state
 const statistics = ref<DashboardStatistics>({
   deviceTotal: 0,
   deviceOnline: 0,
@@ -247,157 +243,252 @@ const alertDistribution = ref<AlertTypeDistribution[]>([]);
 const latestAlerts = ref<HealthDeviceAlertVO[]>([]);
 const deviceDistribution = ref<DeviceDistribution[]>([]);
 
-// 自动刷新控制
+// Auto refresh control
 const autoRefresh = ref(true);
 const countdown = ref(30);
-let refreshTimer: NodeJS.Timeout | null = null;
-let countdownTimer: NodeJS.Timeout | null = null;
+let refreshTimer: ReturnType<typeof setInterval> | null = null;
+let countdownTimer: ReturnType<typeof setInterval> | null = null;
 
-/** 获取统计数据 */
 const getStatisticsData = async () => {
   try {
     const res = await getStatistics();
     statistics.value = res.data;
   } catch (error) {
-    console.error('获取统计数据失败:', error);
+    console.error('Failed to get statistics:', error);
   }
 };
 
-/** 获取设备在线率 */
 const getOnlineRateData = async () => {
   try {
     const res = await getDeviceOnlineRate();
     onlineRate.value = res.data;
     renderOnlineRateChart();
   } catch (error) {
-    console.error('获取设备在线率失败:', error);
+    console.error('Failed to get online rate:', error);
   }
 };
 
-/** 获取告警趋势 */
 const getAlertTrendData = async () => {
   try {
     const res = await getAlertTrend();
     alertTrend.value = res.data;
     renderAlertTrendChart();
   } catch (error) {
-    console.error('获取告警趋势失败:', error);
+    console.error('Failed to get alert trend:', error);
   }
 };
 
-/** 获取告警类型分布 */
 const getAlertDistributionData = async () => {
   try {
     const res = await getAlertTypeDistribution();
     alertDistribution.value = res.data;
     renderAlertDistributionChart();
   } catch (error) {
-    console.error('获取告警类型分布失败:', error);
+    console.error('Failed to get alert distribution:', error);
   }
 };
 
-/** 获取最新告警 */
 const getLatestAlertsData = async () => {
   try {
     const res = await getLatestAlerts();
     latestAlerts.value = res.data;
   } catch (error) {
-    console.error('获取最新告警失败:', error);
+    console.error('Failed to get latest alerts:', error);
   }
 };
 
-/** 获取设备分布 */
 const getDeviceDistributionData = async () => {
   try {
     const res = await getDeviceDistribution();
     deviceDistribution.value = res.data;
-    renderDeviceMap();
+    renderDeviceDistributionChart();
   } catch (error) {
-    console.error('获取设备分布失败:', error);
+    console.error('Failed to get device distribution:', error);
   }
 };
 
-/** 渲染设备在线率图表 */
 const renderOnlineRateChart = () => {
-  const chartContainer = document.getElementById('onlineRateChart');
-  if (!chartContainer) return;
-  
-  // 这里可以集成ECharts环形图
-  // 示例代码，实际需要根据具体图表库实现
-  chartContainer.innerHTML = `
-    <div style="display: flex; align-items: center; justify-content: center; height: 200px;">
-      <div style="text-align: center;">
-        <div style="font-size: 36px; font-weight: bold; color: #409EFF; margin-bottom: 10px;">
-          ${onlineRate.value.rate}%
-        </div>
-        <div style="font-size: 14px; color: #666;">设备在线率</div>
-      </div>
-    </div>
-  `;
+  if (!onlineRateChartRef.value) return;
+  if (!onlineRateChart) {
+    onlineRateChart = echarts.init(onlineRateChartRef.value);
+  }
+  const option: echarts.EChartsOption = {
+    tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' },
+    series: [{
+      name: '设备状态',
+      type: 'pie',
+      radius: ['50%', '70%'],
+      center: ['50%', '50%'],
+      avoidLabelOverlap: false,
+      itemStyle: { borderRadius: 10, borderColor: '#fff', borderWidth: 2 },
+      label: {
+        show: true,
+        position: 'center',
+        formatter: () => `${onlineRate.value.rate}%\n在线率`,
+        fontSize: 16,
+        fontWeight: 'bold',
+        color: '#409EFF'
+      },
+      data: [
+        { value: onlineRate.value.online, name: '在线', itemStyle: { color: '#67C23A' } },
+        { value: onlineRate.value.offline, name: '离线', itemStyle: { color: '#F56C6C' } }
+      ]
+    }]
+  };
+  onlineRateChart.setOption(option);
 };
 
-/** 渲染告警趋势图表 */
 const renderAlertTrendChart = () => {
-  const chartContainer = document.getElementById('alertTrendChart');
-  if (!chartContainer) return;
-  
-  // 这里可以集成ECharts折线图
-  chartContainer.innerHTML = `
-    <div style="display: flex; align-items: center; justify-content: center; height: 200px; background: #f5f5f5; border: 1px dashed #ccc;">
-      <div style="text-align: center;">
-        <p style="margin: 0; font-size: 14px; color: #666;">告警趋势图表</p>
-        <p style="margin: 10px 0 0 0; font-size: 12px; color: #999;">
-          数据点数: ${alertTrend.value.length}<br>
-          (此处可集成ECharts折线图)
-        </p>
-      </div>
-    </div>
-  `;
+  if (!alertTrendChartRef.value) return;
+  if (!alertTrendChart) {
+    alertTrendChart = echarts.init(alertTrendChartRef.value);
+  }
+  const dates = alertTrend.value.map(item => item.date);
+  const counts = alertTrend.value.map(item => item.count);
+  const option: echarts.EChartsOption = {
+    tooltip: {
+      trigger: 'axis',
+      axisPointer: { type: 'cross', label: { backgroundColor: '#6a7985' } }
+    },
+    grid: { left: '3%', right: '4%', bottom: '3%', top: '10%', containLabel: true },
+    xAxis: {
+      type: 'category',
+      boundaryGap: false,
+      data: dates,
+      axisLine: { lineStyle: { color: '#E4E7ED' } },
+      axisLabel: { color: '#606266' }
+    },
+    yAxis: {
+      type: 'value',
+      minInterval: 1,
+      axisLine: { show: false },
+      axisTick: { show: false },
+      splitLine: { lineStyle: { color: '#E4E7ED', type: 'dashed' } },
+      axisLabel: { color: '#606266' }
+    },
+    series: [{
+      name: '告警数',
+      type: 'line',
+      smooth: true,
+      symbol: 'circle',
+      symbolSize: 8,
+      lineStyle: { color: '#F56C6C', width: 3 },
+      itemStyle: { color: '#F56C6C' },
+      areaStyle: {
+        color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+          { offset: 0, color: 'rgba(245, 108, 108, 0.3)' },
+          { offset: 1, color: 'rgba(245, 108, 108, 0.05)' }
+        ])
+      },
+      data: counts
+    }]
+  };
+  alertTrendChart.setOption(option);
 };
 
-/** 渲染告警类型分布图表 */
 const renderAlertDistributionChart = () => {
-  const chartContainer = document.getElementById('alertDistributionChart');
-  if (!chartContainer) return;
-  
-  // 这里可以集成ECharts饼图
-  chartContainer.innerHTML = `
-    <div style="display: flex; align-items: center; justify-content: center; height: 200px; background: #f5f5f5; border: 1px dashed #ccc;">
-      <div style="text-align: center;">
-        <p style="margin: 0; font-size: 14px; color: #666;">告警类型分布</p>
-        <p style="margin: 10px 0 0 0; font-size: 12px; color: #999;">
-          类型数: ${alertDistribution.value.length}<br>
-          (此处可集成ECharts饼图)
-        </p>
-      </div>
-    </div>
-  `;
+  if (!alertDistributionChartRef.value) return;
+  if (!alertDistributionChart) {
+    alertDistributionChart = echarts.init(alertDistributionChartRef.value);
+  }
+  const colors = ['#F56C6C', '#E6A23C', '#409EFF', '#909399', '#67C23A'];
+  const data = alertDistribution.value.map((item, index) => ({
+    value: item.count,
+    name: item.name,
+    itemStyle: { color: colors[index % colors.length] }
+  }));
+  const option: echarts.EChartsOption = {
+    tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' },
+    legend: {
+      orient: 'vertical',
+      right: '5%',
+      top: 'center',
+      itemWidth: 10,
+      itemHeight: 10,
+      textStyle: { fontSize: 12, color: '#606266' }
+    },
+    series: [{
+      name: '告警类型',
+      type: 'pie',
+      radius: ['40%', '65%'],
+      center: ['35%', '50%'],
+      avoidLabelOverlap: false,
+      itemStyle: { borderRadius: 6, borderColor: '#fff', borderWidth: 2 },
+      label: { show: false },
+      emphasis: { label: { show: true, fontSize: 14, fontWeight: 'bold' } },
+      data: data
+    }]
+  };
+  alertDistributionChart.setOption(option);
 };
 
-/** 渲染设备分布地图 */
-const renderDeviceMap = () => {
-  // 地图渲染逻辑已在模板中实现
+const renderDeviceDistributionChart = () => {
+  if (!deviceDistributionChartRef.value) return;
+  if (!deviceDistributionChart) {
+    deviceDistributionChart = echarts.init(deviceDistributionChartRef.value);
+  }
+  const onlineDevices = deviceDistribution.value.filter(d => d.online);
+  const offlineDevices = deviceDistribution.value.filter(d => !d.online);
+  const option: echarts.EChartsOption = {
+    tooltip: {
+      trigger: 'item',
+      formatter: (params: any) => `${params.data.name}<br/>状态: ${params.seriesName}<br/>位置: ${params.data.location || '未知'}`
+    },
+    legend: { data: ['在线设备', '离线设备'], bottom: 10, itemWidth: 10, itemHeight: 10 },
+    grid: { left: '3%', right: '3%', bottom: '15%', top: '5%', containLabel: true },
+    xAxis: {
+      type: 'value',
+      name: '经度',
+      nameLocation: 'middle',
+      nameGap: 25,
+      min: 121.0,
+      max: 122.0,
+      axisLine: { lineStyle: { color: '#E4E7ED' } },
+      splitLine: { lineStyle: { color: '#E4E7ED', type: 'dashed' } },
+      axisLabel: { color: '#909399', fontSize: 10 }
+    },
+    yAxis: {
+      type: 'value',
+      name: '纬度',
+      nameLocation: 'middle',
+      nameGap: 35,
+      min: 31.0,
+      max: 31.5,
+      axisLine: { lineStyle: { color: '#E4E7ED' } },
+      splitLine: { lineStyle: { color: '#E4E7ED', type: 'dashed' } },
+      axisLabel: { color: '#909399', fontSize: 10 }
+    },
+    series: [
+      {
+        name: '在线设备',
+        type: 'scatter',
+        symbolSize: 15,
+        itemStyle: { color: '#67C23A', shadowBlur: 10, shadowColor: 'rgba(103, 194, 58, 0.5)' },
+        data: onlineDevices.map(d => ({ value: [d.lng || 121.5, d.lat || 31.2], name: d.name, location: d.location }))
+      },
+      {
+        name: '离线设备',
+        type: 'scatter',
+        symbolSize: 15,
+        itemStyle: { color: '#F56C6C', shadowBlur: 10, shadowColor: 'rgba(245, 108, 108, 0.5)' },
+        data: offlineDevices.map(d => ({ value: [d.lng || 121.5, d.lat || 31.2], name: d.name, location: d.location }))
+      }
+    ]
+  };
+  deviceDistributionChart.setOption(option);
 };
 
-/** 格式化时间 */
 const formatTime = (time: string) => {
   if (!time) return '';
   const date = new Date(time);
   const now = new Date();
   const diff = now.getTime() - date.getTime();
-  
-  if (diff < 60000) { // 1分钟内
-    return '刚刚';
-  } else if (diff < 3600000) { // 1小时内
-    return Math.floor(diff / 60000) + '分钟前';
-  } else if (diff < 86400000) { // 1天内
-    return Math.floor(diff / 3600000) + '小时前';
-  } else {
-    return proxy.parseTime(time, '{m}-{d} {h}:{i}');
-  }
+  if (diff < 60000) return '刚刚';
+  if (diff < 3600000) return Math.floor(diff / 60000) + '分钟前';
+  if (diff < 86400000) return Math.floor(diff / 3600000) + '小时前';
+  return proxy?.parseTime(time, '{m}-{d} {h}:{i}') || time;
 };
 
-/** 刷新所有数据 */
 const refreshAllData = async () => {
   await Promise.all([
     getStatisticsData(),
@@ -409,81 +500,50 @@ const refreshAllData = async () => {
   ]);
 };
 
-/** 刷新设备在线率 */
-const refreshOnlineRate = () => {
-  getOnlineRateData();
-};
+const refreshOnlineRate = () => getOnlineRateData();
+const refreshAlertTrend = () => getAlertTrendData();
+const refreshAlertDistribution = () => getAlertDistributionData();
+const refreshLatestAlerts = () => getLatestAlertsData();
+const refreshDeviceDistribution = () => getDeviceDistributionData();
 
-/** 刷新告警趋势 */
-const refreshAlertTrend = () => {
-  getAlertTrendData();
-};
-
-/** 刷新告警分布 */
-const refreshAlertDistribution = () => {
-  getAlertDistributionData();
-};
-
-/** 刷新最新告警 */
-const refreshLatestAlerts = () => {
-  getLatestAlertsData();
-};
-
-/** 刷新设备分布 */
-const refreshDeviceDistribution = () => {
-  getDeviceDistributionData();
-};
-
-/** 处理自动刷新开关 */
 const handleAutoRefreshChange = (value: boolean) => {
-  if (value) {
-    startAutoRefresh();
-  } else {
-    stopAutoRefresh();
-  }
+  value ? startAutoRefresh() : stopAutoRefresh();
 };
 
-/** 开始自动刷新 */
 const startAutoRefresh = () => {
   countdown.value = 30;
-  
-  // 倒计时定时器
   countdownTimer = setInterval(() => {
     countdown.value--;
-    if (countdown.value <= 0) {
-      countdown.value = 30;
-    }
+    if (countdown.value <= 0) countdown.value = 30;
   }, 1000);
-  
-  // 刷新定时器
-  refreshTimer = setInterval(() => {
-    refreshAllData();
-  }, 30000);
+  refreshTimer = setInterval(() => refreshAllData(), 30000);
 };
 
-/** 停止自动刷新 */
 const stopAutoRefresh = () => {
-  if (refreshTimer) {
-    clearInterval(refreshTimer);
-    refreshTimer = null;
-  }
-  if (countdownTimer) {
-    clearInterval(countdownTimer);
-    countdownTimer = null;
-  }
+  if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null; }
+  if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = null; }
 };
 
-/** 组件挂载 */
+const handleResize = () => {
+  onlineRateChart?.resize();
+  alertTrendChart?.resize();
+  alertDistributionChart?.resize();
+  deviceDistributionChart?.resize();
+};
+
 onMounted(() => {
   refreshAllData();
-  if (autoRefresh.value) {
-    startAutoRefresh();
-  }
+  if (autoRefresh.value) startAutoRefresh();
+  window.addEventListener('resize', handleResize);
 });
 
-/** 组件卸载 */
 onUnmounted(() => {
   stopAutoRefresh();
+  window.removeEventListener('resize', handleResize);
+  onlineRateChart?.dispose();
+  alertTrendChart?.dispose();
+  alertDistributionChart?.dispose();
+  deviceDistributionChart?.dispose();
 });
 </script>
 
@@ -494,279 +554,58 @@ onUnmounted(() => {
   min-height: calc(100vh - 84px);
 }
 
-/* 统计卡片样式 */
-.stat-card {
-  height: 120px;
-  margin-bottom: 20px;
-}
-
-.stat-item {
-  display: flex;
-  align-items: center;
-  height: 100%;
-}
-
+.stat-card { height: 120px; margin-bottom: 20px; }
+.stat-item { display: flex; align-items: center; height: 100%; }
 .stat-icon {
-  width: 60px;
-  height: 60px;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 24px;
-  color: white;
-  margin-right: 20px;
+  width: 60px; height: 60px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 24px; color: white; margin-right: 20px;
 }
+.device-icon { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); }
+.online-icon { background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); }
+.elder-icon { background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%); }
+.alert-icon { background: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%); }
+.stat-content { flex: 1; }
+.stat-value { font-size: 32px; font-weight: bold; color: #303133; line-height: 1; margin-bottom: 8px; }
+.stat-label { font-size: 14px; color: #909399; }
 
-.device-icon {
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-}
+.chart-card { height: 350px; margin-bottom: 20px; }
+.card-header { display: flex; justify-content: space-between; align-items: center; font-weight: bold; }
+.chart-container { height: 180px; width: 100%; }
+.chart-container-full { height: 260px; width: 100%; }
+.chart-info { display: flex; justify-content: space-around; margin-top: 10px; padding-top: 10px; border-top: 1px solid #ebeef5; }
+.info-item { text-align: center; }
+.info-label { font-size: 12px; color: #909399; display: block; margin-bottom: 5px; }
+.info-value { font-size: 18px; font-weight: bold; color: #303133; }
+.info-value.online { color: #67c23a; }
+.info-value.offline { color: #f56c6c; }
 
-.online-icon {
-  background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
-}
+.list-card { height: 400px; margin-bottom: 20px; }
+.alert-list { height: 320px; overflow-y: auto; }
+.empty-data { height: 100%; display: flex; align-items: center; justify-content: center; }
+.alert-item { display: flex; align-items: center; padding: 12px 0; border-bottom: 1px solid #ebeef5; }
+.alert-item:last-child { border-bottom: none; }
+.alert-level { width: 60px; flex-shrink: 0; }
+.alert-content { flex: 1; margin: 0 15px; }
+.alert-title { font-size: 14px; color: #303133; margin-bottom: 5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.alert-info { font-size: 12px; color: #909399; }
+.alert-status { width: 70px; flex-shrink: 0; text-align: right; }
 
-.elder-icon {
-  background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
-}
+.map-card { height: 400px; margin-bottom: 20px; }
+.map-container { height: 320px; width: 100%; }
 
-.alert-icon {
-  background: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%);
-}
-
-.stat-content {
-  flex: 1;
-}
-
-.stat-value {
-  font-size: 32px;
-  font-weight: bold;
-  color: #303133;
-  line-height: 1;
-  margin-bottom: 8px;
-}
-
-.stat-label {
-  font-size: 14px;
-  color: #909399;
-}
-
-/* 图表卡片样式 */
-.chart-card {
-  height: 350px;
-  margin-bottom: 20px;
-}
-
-.card-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  font-weight: bold;
-}
-
-.chart-container {
-  height: 200px;
-  width: 100%;
-}
-
-.chart-info {
-  display: flex;
-  justify-content: space-around;
-  margin-top: 20px;
-  padding-top: 20px;
-  border-top: 1px solid #ebeef5;
-}
-
-.info-item {
-  text-align: center;
-}
-
-.info-label {
-  font-size: 12px;
-  color: #909399;
-  display: block;
-  margin-bottom: 5px;
-}
-
-.info-value {
-  font-size: 18px;
-  font-weight: bold;
-  color: #303133;
-}
-
-.info-value.online {
-  color: #67c23a;
-}
-
-.info-value.offline {
-  color: #f56c6c;
-}
-
-/* 列表卡片样式 */
-.list-card {
-  height: 400px;
-  margin-bottom: 20px;
-}
-
-.alert-list {
-  height: 320px;
-  overflow-y: auto;
-}
-
-.empty-data {
-  height: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.alert-item {
-  display: flex;
-  align-items: center;
-  padding: 12px 0;
-  border-bottom: 1px solid #ebeef5;
-}
-
-.alert-item:last-child {
-  border-bottom: none;
-}
-
-.alert-level {
-  width: 60px;
-  flex-shrink: 0;
-}
-
-.alert-content {
-  flex: 1;
-  margin: 0 15px;
-}
-
-.alert-title {
-  font-size: 14px;
-  color: #303133;
-  margin-bottom: 5px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.alert-info {
-  font-size: 12px;
-  color: #909399;
-}
-
-.alert-user {
-  margin-right: 15px;
-}
-
-.alert-status {
-  width: 70px;
-  flex-shrink: 0;
-  text-align: right;
-}
-
-/* 地图卡片样式 */
-.map-card {
-  height: 400px;
-  margin-bottom: 20px;
-}
-
-.map-container {
-  height: 320px;
-  width: 100%;
-}
-
-.map-placeholder {
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  background: #f5f5f5;
-  border: 1px dashed #ccc;
-  border-radius: 4px;
-}
-
-.map-icon {
-  font-size: 48px;
-  color: #409EFF;
-  margin-bottom: 10px;
-}
-
-.device-stats {
-  margin: 20px 0;
-}
-
-.device-stat-item {
-  display: flex;
-  align-items: center;
-  margin: 5px 0;
-  font-size: 14px;
-  color: #666;
-}
-
-.stat-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  margin-right: 8px;
-}
-
-.online-dot {
-  background: #67c23a;
-}
-
-.offline-dot {
-  background: #f56c6c;
-}
-
-.map-note {
-  font-size: 12px;
-  color: #ccc;
-  margin: 10px 0 0 0;
-}
-
-/* 自动刷新控制 */
 .refresh-control {
-  position: fixed;
-  bottom: 20px;
-  right: 20px;
-  background: white;
-  padding: 10px 15px;
-  border-radius: 20px;
+  position: fixed; bottom: 20px; right: 20px;
+  background: white; padding: 10px 15px; border-radius: 20px;
   box-shadow: 0 2px 12px 0 rgba(0, 0, 0, 0.1);
-  display: flex;
-  align-items: center;
-  gap: 10px;
+  display: flex; align-items: center; gap: 10px;
 }
+.refresh-countdown { font-size: 12px; color: #909399; }
 
-.refresh-countdown {
-  font-size: 12px;
-  color: #909399;
-}
-
-/* 响应式设计 */
 @media (max-width: 768px) {
-  .dashboard-container {
-    padding: 10px;
-  }
-  
-  .stat-value {
-    font-size: 24px;
-  }
-  
-  .stat-icon {
-    width: 50px;
-    height: 50px;
-    font-size: 20px;
-    margin-right: 15px;
-  }
-  
-  .chart-card,
-  .list-card,
-  .map-card {
-    height: auto;
-    min-height: 300px;
-  }
+  .dashboard-container { padding: 10px; }
+  .stat-value { font-size: 24px; }
+  .stat-icon { width: 50px; height: 50px; font-size: 20px; margin-right: 15px; }
+  .chart-card, .list-card, .map-card { height: auto; min-height: 300px; }
 }
 </style>
